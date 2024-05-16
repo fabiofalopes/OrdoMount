@@ -1,2 +1,5 @@
 .venv/
 rascunhos/
+build/
+dist/
+main.spec

@@ -1,9 +1,12 @@
 import subprocess
 import tkinter as tk
 from tkinter import ttk
+import getpass
 
 # User configuration
-user = "fabio"
+user = getpass.getuser() # user = "fabio"
+
+
 
 def get_available_drives():
     result = subprocess.run(["rclone", "listremotes"], capture_output=True, text=True)
@@ -20,7 +23,12 @@ def mount_drive():
 
     mount_path = f"/home/{user}/mounts/{selected_drive.rstrip(':')}"
     subprocess.run(["mkdir", "-p", mount_path])  # Create mount directory
-    subprocess.run(["rclone", "mount", selected_drive, mount_path, "--allow-non-empty", "--daemon"])
+    # rclone mount using subprocess
+    subprocess.run(["rclone", "mount", "--daemon", selected_drive, mount_path, "--allow-non-empty"])
+    command = ["rclone", "mount", selected_drive, mount_path, "--allow-non-empty", "--daemon"]
+    result = subprocess.run(command, capture_output=True, text=True)
+    log_text.insert(tk.END, f"{' '.join(command)}\n")
+    log_text.insert(tk.END, result.stdout)
 
     update_status("Mounted", "#4CAF50")  # Green for mounted
     log_text.insert(tk.END, f"{selected_drive} mounted at {mount_path}\n")
@@ -33,7 +41,10 @@ def unmount_drive():
         root.update_idletasks()  # Update the GUI immediately
 
         mount_path = f"/home/{user}/mounts/{selected_drive.rstrip(':')}"
-        subprocess.run(["fusermount", "-uz", mount_path])  # Unmount the drive
+        command = ["fusermount", "-uz", mount_path]
+        result = subprocess.run(command, capture_output=True, text=True)
+        log_text.insert(tk.END, f"{' '.join(command)}\n")
+        log_text.insert(tk.END, result.stdout)
 
         update_status("Unmounted", "#F44336")  # Red for unmounted
         log_text.insert(tk.END, f"{selected_drive} unmounted from {mount_path}\n")
@@ -69,7 +80,7 @@ header_frame = tk.Frame(root, bg='#333333')  # Header background
 header_frame.pack(fill='x')
 
 # Create a header label
-header_label = tk.Label(header_frame, text="Drive Manager", bg='#333333', fg='white', font=("Helvetica", 24, "bold"))
+header_label = tk.Label(header_frame, text="Ordo Mount", bg='#333333', fg='white', font=("Helvetica", 24, "bold"))
 header_label.pack(pady=15)
 
 # Create a main frame

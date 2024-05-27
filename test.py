@@ -145,7 +145,7 @@ update_option_menu(drive_menu, drive_var, drives)
 # Mount path selection
 tk.Label(main_frame, text="Mount Path:", bg='#1C1C1C', fg='white', font=("Helvetica", 14)).grid(row=2, column=0, sticky='w')
 mount_path_entry = tk.Entry(main_frame, textvariable=mount_path_var, font=("Helvetica", 12), width=40)
-mount_path_entry.grid(row=3, column=0, pady=10, sticky='w')
+mount_path_entry.grid(row=4, column=1, pady=10, sticky='w')
 select_dir_button = tk.Button(main_frame, text="Browse...", command=select_mount_directory, font=("Helvetica", 12), bg='#D1D1D1', fg='#1C1C1C')
 select_dir_button.grid(row=3, column=1, pady=10, sticky='w')
 

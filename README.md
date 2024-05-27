@@ -304,8 +304,9 @@ class LinuxDriveManager(DriveManager):
 ```
 In this adaptation:
 
-We created a common package to hold the drive_manager.py module, which contains the base class DriveManager.
-We created a linux package to hold the Linux-specific implementation of the DriveManager class (LinuxDriveManager).
-We implemented Linux-specific methods for mounting, unmounting, checking status, and updating options in drive_manager.py.
-We left the Windows-specific implementation as a placeholder with //TODO comments to indicate that it needs to be implemented.
+- We created a common package to hold the drive_manager.py module, which contains the base class DriveManager.
+- We created a linux package to hold the Linux-specific implementation of the DriveManager class (LinuxDriveManager).
+- We implemented Linux-specific methods for mounting, unmounting, checking status, and updating options in drive_manager.py.
+- We left the Windows-specific implementation as a placeholder with //TODO comments to indicate that it needs to be implemented.
+
 ---

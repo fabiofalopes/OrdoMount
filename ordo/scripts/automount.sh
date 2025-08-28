@@ -86,7 +86,7 @@ for remote in "${configured_remotes[@]}"; do
     # Check if already mounted
     if mountpoint -q "$mount_point" 2>/dev/null; then
         log "INFO: $remote is already mounted at $mount_point"
-        ((mounted_count++))
+        mounted_count=$((mounted_count + 1))
         continue
     fi
     
@@ -94,10 +94,10 @@ for remote in "${configured_remotes[@]}"; do
     log "Mounting $remote to $mount_point..."
     if "$ORDO_DIR/scripts/mount-remote.sh" "$remote"; then
         log "SUCCESS: Mounted $remote"
-        ((mounted_count++))
+        mounted_count=$((mounted_count + 1))
     else
         log "ERROR: Failed to mount $remote"
-        ((failed_count++))
+        failed_count=$((failed_count + 1))
     fi
 done
 

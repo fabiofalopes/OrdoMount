@@ -5,8 +5,9 @@
 
 set -euo pipefail
 
-# Configuration
-ORDO_DIR="$HOME/.ordo"
+# Configuration - Auto-detect script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORDO_DIR="$(dirname "$SCRIPT_DIR")"
 MOUNT_BASE="$HOME/mounts"
 LOG_FILE="$ORDO_DIR/logs/unmount.log"
 

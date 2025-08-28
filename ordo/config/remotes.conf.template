@@ -1,0 +1,15 @@
+# Ordo Remote Configuration Template
+# Copy this file to remotes.conf and configure your remotes
+#
+# Instructions:
+# 1. List one rclone remote per line (without the colon)
+# 2. Use 'rclone listremotes' to see available remotes
+# 3. Lines starting with # are comments
+#
+# Examples:
+# gdrive-personal
+# onedrive-work
+# s3-backup
+#
+# Your remotes (uncomment and modify):
+# your-remote-name-here

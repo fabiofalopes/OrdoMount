@@ -5,8 +5,9 @@
 
 set -euo pipefail
 
-# Configuration
-ORDO_DIR="$HOME/.ordo"
+# Configuration - Auto-detect script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORDO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$ORDO_DIR/config/remotes.conf"
 LOG_FILE="$ORDO_DIR/logs/automount.log"
 MOUNT_BASE="$HOME/mounts"
@@ -29,7 +30,7 @@ fi
 # Check if config file exists
 if [[ ! -f "$CONFIG_FILE" ]]; then
     log "ERROR: Configuration file not found: $CONFIG_FILE"
-    log "Please create the file and list your rclone remotes (one per line)"
+    log "Run './scripts/init.sh' to initialize Ordo and create the configuration file"
     exit 1
 fi
 

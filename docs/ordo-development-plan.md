@@ -2,18 +2,18 @@
 
 ## Project Overview
 
-Create a `.ordo` directory in the user's home folder containing simple bash scripts that automate rclone mounting with intelligent VFS caching. Focus on the core functionality: automatic mounting of existing remotes on startup with robust logging and caching.
+Create an `ordo` directory in the user's home folder containing simple bash scripts that automate rclone mounting with intelligent VFS caching. Focus on the core functionality: automatic mounting of existing remotes on startup with robust logging and caching.
 
 ## Core Architecture
 
-**Location**: `~/.ordo/` (dotfile approach for system-wide availability)
+**Location**: `~/ordo/` (directory approach for system-wide availability)
 **Target Environment**: Linux/macOS with rclone already installed and configured
 **Primary Goal**: Automate mounting of existing rclone remotes with VFS caching
 
 ## Directory Structure
 
 ```
-~/.ordo/
+~/ordo/
 ├── scripts/
 │   ├── automount.sh      # Main script - mount all configured remotes
 │   ├── mount-remote.sh   # Mount single remote with VFS caching
@@ -34,7 +34,7 @@ Create a `.ordo` directory in the user's home folder containing simple bash scri
 **Goal**: Set up the basic directory structure and configuration system
 
 **Tasks**:
-1. Create `.ordo` directory structure in home folder
+1. Create `ordo` directory structure in home folder
 2. Implement `remotes.conf` format for listing available remotes
 3. Create basic logging infrastructure
 4. Write simple README with usage instructions
@@ -75,10 +75,10 @@ Create a `.ordo` directory in the user's home folder containing simple bash scri
     --vfs-cache-mode full \
     --vfs-cache-max-size 10G \
     --vfs-cache-max-age 24h \
-    --cache-dir ~/.ordo/cache \
+    --cache-dir ~/ordo/cache \
     --daemon \
     --allow-non-empty \
-    --log-file ~/.ordo/logs/mount-[remote].log
+    --log-file ~/ordo/logs/mount-[remote].log
   ```
 - Check if already mounted before attempting mount
 - Verify mount success after operation
@@ -150,7 +150,7 @@ Create a `.ordo` directory in the user's home folder containing simple bash scri
 ### VFS Cache Configuration
 - Default cache size: 10GB (configurable)
 - Cache age: 24 hours (configurable)
-- Cache location: `~/.ordo/cache/`
+- Cache location: `~/ordo/cache/`
 - LRU eviction for automatic management
 
 ## Integration Points

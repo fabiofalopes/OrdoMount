@@ -5,8 +5,9 @@
 
 set -euo pipefail
 
-# Configuration
-ORDO_DIR="$HOME/.ordo"
+# Configuration - Auto-detect script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORDO_DIR="$(dirname "$SCRIPT_DIR")"
 MOUNT_BASE="$HOME/mounts"
 CACHE_DIR="$ORDO_DIR/cache"
 CONFIG_FILE="$ORDO_DIR/config/remotes.conf"
@@ -73,6 +74,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
     fi
 else
     print_error "Configuration file not found: $CONFIG_FILE"
+    echo "Run './scripts/init.sh' to initialize Ordo and create the configuration file"
 fi
 
 # Check mount status

@@ -1,3 +1,12 @@
+# ⚠️ ARCHIVED: Ordo Development Plan (legacy mount/VFS concept)
+
+This document reflects an early mount-first design (~/mounts, VFS caching). The project now follows a local-first architecture with background bisync and FHS-compliant mounts under `/media/$USER/` for browsing.
+
+For current guidance see:
+- `docs/ANALYSIS-AND-STREAMLINED-PLAN.md`
+- `docs/IMPLEMENTATION-SUMMARY.md`
+- `ordo/README.md`
+
 # Ordo Development Plan
 
 ## Project Overview

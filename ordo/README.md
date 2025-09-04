@@ -39,11 +39,26 @@ This interactive script will:
 # Setup creates: ~/ObsidianVaults/MyVault/
 # Point Obsidian to: ~/ObsidianVaults/MyVault/
 # Syncs with: onedrive:Documents/ObsidianVaults/MyVault
+ 
+# Read-only verification (after initial run completes)
+./scripts/ordo-sync.sh verify       # Reports “In sync” vs “Drift detected”
 
 # Example: Project development  
 # Setup creates: ~/Documents/MyProject/
 # Point your IDE to: ~/Documents/MyProject/
 # Syncs with: gdrive:Projects/MyProject
+## Verification and First Run
+
+- First successful run creates a local marker: `<local>/.rclone-bisync-state`.
+- Until that first run completes, bisync operates with `--resync` and dry-runs may error due to missing prior listings — this is expected.
+- After the first run completes, use:
+   - `./scripts/ordo-sync.sh verify` — safe dry-run check (skips if a live bisync is running)
+   - Optional: `rclone check <local> <remote> --size-only` for a read-only double-check
+
+How to tell it’s done:
+- rclone process exits; log contains “✓ Bidirectional sync completed for <Target>”.
+- `<local>/.rclone-bisync-state` exists.
+- `./scripts/ordo-sync.sh verify` reports “In sync (no planned changes)”.
 ```
 
 ### 3. That's It!
@@ -51,12 +66,19 @@ This interactive script will:
 - Applications never know files are synced
 - Work completely offline
 - Browse all remote files at `/media/$USER/remote-name/` when connected
+Common first-run message during dry-run:
+- `Bisync critical error: cannot find prior Path1 or Path2 listings ... Must run --resync to recover.`
+   - Cause: initial `--resync` hasn’t finished writing prior listings yet.
+   - Fix: wait for the first run to complete; then use `./scripts/ordo-sync.sh verify`.
 
 ## Architecture
 
 ### Two-Tier System
 1. **Local Sync Targets** (`~/Documents/`, `~/ObsidianVaults/`)
    - Where applications point
+### Stale Bisync Lock
+- Symptom: immediate retries with 0 B transferred or refusal to start.
+- Behavior: the sync script checks `~/.cache/rclone/bisync/*.lck`, verifies the PID, and auto-clears the lock if the PID isn’t running (tries `rclone deletefile`, then `rm`).
    - Always available (even offline)
    - Background sync keeps current
 
@@ -71,7 +93,14 @@ This interactive script will:
 ~/ObsidianVaults/MyVault/     ← Point Obsidian here
 ~/Documents/MyProject/        ← Point IDE here
 ~/Documents/important.txt     ← Always available
+- `config/sync-excludes.conf` — rclone filter rules for files/folders to exclude from sync.
+- Used automatically by `ordo-sync.sh`.
 
+- External timeout wrapper (disabled by default):
+   - `ORDO_BISYNC_TIMEOUT_SEC=<seconds>` — apply an upper bound to a bisync run (0 or unset disables).
+- Built-in resiliency (no extra config needed):
+   - Retries, low-level retries, periodic stats, parallel checkers/transfers.
+   - Logs at `logs/ordo-sync.log`.
 # Remote Browse Mounts (for exploration)  
 /media/$USER/onedrive/        ← Browse when connected
 /media/$USER/gdrive/          ← Browse when connected

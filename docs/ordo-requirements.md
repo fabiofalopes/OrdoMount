@@ -1,3 +1,12 @@
+# ⚠️ ARCHIVED: Ordo Requirements (legacy mount/VFS concept)
+
+This document captures the initial mount-first vision (~/mounts with VFS caching). It has been superseded by the local-first sync architecture.
+
+See current docs:
+- `docs/ANALYSIS-AND-STREAMLINED-PLAN.md`
+- `docs/IMPLEMENTATION-SUMMARY.md`
+- `ordo/README.md`
+
 # Ordo: Simple rclone Automation Scripts
 
 ## What We Actually Need

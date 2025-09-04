@@ -1,12 +1,14 @@
-# rclone Commands Used in ordo.sh
+# ⚠️ ARCHIVED: rclone mount reference (legacy examples)
 
-This document lists all the rclone commands utilized in the `ordo.sh` script for managing remote drive operations.
+This page contains legacy examples using `~/mounts`. Ordo now mounts for browsing under `/media/$USER/<remote>/` and uses local-first sync for apps. Prefer using `./ordo/scripts/automount.sh` and `./ordo/scripts/mount-remote.sh`.
+
+# rclone Commands Used in Ordo
 
 ## Command Summary
 
 ### 1. `rclone listremotes`
 **Purpose**: Lists all configured remote storage connections  
-**Usage in script**: Used in the `get_drives()` function to retrieve available drives  
+**Usage**: Discover available remotes for mounting/browsing and configuration  
 **Output format**: Each remote name followed by a colon (e.g., `GoogleDrive:`, `OneDrive:`)  
 **Script context**:
 ```bash
@@ -16,16 +18,12 @@ done < <(rclone listremotes)
 ```
 
 ### 2. `rclone mount`
-**Purpose**: Mounts a remote storage as a local filesystem  
-**Usage in script**: Used in the `mount_drive()` function to mount selected drives  
-**Full command**: `rclone mount "$DRIVE_NAME_WITH_COLON" "$MOUNT_PATH" --allow-non-empty --daemon`  
-**Parameters used**:
-- `--allow-non-empty`: Allows mounting to non-empty directories
-- `--daemon`: Runs the mount process in the background
+**Purpose**: Mounts a remote for browsing (not for apps)  
+**Recommended**: Use Ordo’s scripts which set safe options and mount at `/media/$USER/<remote>/`.
 
-**Script context**:
+Script wrapper used by Ordo:
 ```bash
-rclone mount "$DRIVE_NAME_WITH_COLON" "$MOUNT_PATH" --allow-non-empty --daemon
+./ordo/scripts/mount-remote.sh <remote>
 ```
 
 ## Command Flow
@@ -34,16 +32,11 @@ rclone mount "$DRIVE_NAME_WITH_COLON" "$MOUNT_PATH" --allow-non-empty --daemon
 2. **Mounting**: `rclone mount` with daemon mode mounts the selected drive to a local path
 3. **Unmounting**: Uses system `fusermount -uz` command (not rclone) to unmount drives
 
-## Mount Path Convention
+## Mount Path Convention (current)
 
-The script follows this pattern for mount paths:
 ```
-/home/$USER/mounts/$DRIVE_NAME
+/media/$USER/<remote>
 ```
-
-Where:
-- `$USER` is the current system user
-- `$DRIVE_NAME` is the remote name without the trailing colon
 
 ## Example Commands for OpenDrive Case
 
@@ -55,30 +48,22 @@ rclone listremotes
 # Output: onedrive-f6388:
 ```
 
-### Create mount directory
+### Mount a remote (recommended)
 ```bash
-mkdir -p ~/mounts/onedrive-f6388
-```
-
-### Mount OpenDrive
-```bash
-rclone mount onedrive-f6388: ~/mounts/onedrive-f6388 --allow-non-empty --daemon
+./ordo/scripts/mount-remote.sh onedrive-f6388
+# Mount point: /media/$USER/onedrive-f6388
 ```
 
 ### Check if mounted
 ```bash
-mountpoint ~/mounts/onedrive-f6388
-# Output: /home/username/mounts/onedrive-f6388 is a mountpoint (if successful)
+mountpoint /media/$USER/onedrive-f6388
 ```
 
-### Unmount OpenDrive
+### Unmount
 ```bash
-fusermount -uz ~/mounts/onedrive-f6388
-```
-
-### Alternative unmount (if fusermount fails)
-```bash
-rclone umount ~/mounts/onedrive-f6388
+fusermount -uz /media/$USER/onedrive-f6388
+# or
+rclone umount /media/$USER/onedrive-f6388
 ```
 
 ## Troubleshooting

@@ -8,8 +8,8 @@ set -euo pipefail
 # Configuration - Auto-detect script location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORDO_DIR="$(dirname "$SCRIPT_DIR")"
-MOUNT_BASE="$HOME/mounts"
-CACHE_DIR="$ORDO_DIR/cache"
+MOUNT_BASE="/media/$USER"
+
 CONFIG_FILE="$ORDO_DIR/config/remotes.conf"
 
 # Colors for output
@@ -118,28 +118,57 @@ else
     print_error "Mount base directory not found: $MOUNT_BASE"
 fi
 
-# Check cache status
-print_header "Cache Status"
-if [[ -d "$CACHE_DIR" ]]; then
-    cache_size=$(du -sh "$CACHE_DIR" 2>/dev/null | cut -f1 || echo "0B")
-    cache_files=$(find "$CACHE_DIR" -type f 2>/dev/null | wc -l || echo "0")
-    print_success "Cache directory: $CACHE_DIR"
-    echo "  Size: $cache_size"
-    echo "  Files: $cache_files"
+# Cache not needed in local-first approach
+# Check sync targets status
+print_header "Sync Targets Status"
+sync_config="$ORDO_DIR/config/sync-targets.conf"
+if [[ -f "$sync_config" ]]; then
+    sync_count=0
+    while IFS='|' read -r local_path remote_path sync_frequency || [[ -n "$local_path" ]]; do
+        if [[ -z "$local_path" || "$local_path" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        sync_count=$((sync_count + 1))
+        target_name=$(basename "$local_path")
+        
+        echo -e "\n${YELLOW}Sync Target: $target_name${NC}"
+        echo "  Local:  $local_path"
+        echo "  Remote: $remote_path"
+        
+        if [[ -d "$local_path" ]]; then
+            file_count=$(find "$local_path" -type f 2>/dev/null | wc -l)
+            print_success "Local directory exists ($file_count files)"
+        else
+            print_warning "Local directory missing"
+        fi
+    done < "$sync_config"
+    
+    if [[ $sync_count -eq 0 ]]; then
+        print_warning "No sync targets configured"
+        echo "Use: ./scripts/ordo-sync.sh init <local-path> <remote-path>"
+    else
+        print_success "$sync_count sync targets configured"
+    fi
 else
-    print_warning "Cache directory not found: $CACHE_DIR"
+    print_warning "No sync targets configured"
+    echo "Use: ./scripts/ordo-sync.sh init <local-path> <remote-path>"
 fi
 
-# Check recent logs
 print_header "Recent Activity"
-log_file="$ORDO_DIR/logs/automount.log"
-if [[ -f "$log_file" ]]; then
-    echo "Last 5 log entries:"
-    tail -n 5 "$log_file" | while IFS= read -r line; do
-        echo "  $line"
-    done
-else
-    print_warning "No automount log found"
-fi
+# Check both automount and sync logs
+for log_name in "automount" "ordo-sync"; do
+    log_file="$ORDO_DIR/logs/${log_name}.log"
+    if [[ -f "$log_file" ]]; then
+        echo -e "\n${YELLOW}${log_name} log (last 3 entries):${NC}"
+        tail -n 3 "$log_file" | while IFS= read -r line; do
+            echo "  $line"
+        done
+    fi
+done
 
 echo -e "\n${BLUE}Status check complete${NC}"
+echo ""
+echo "Key Commands:"
+echo "  ./scripts/ordo-sync.sh status    - Detailed sync status"
+echo "  ./scripts/ordo-sync.sh daemon    - Start background sync"
+echo "  ./scripts/automount.sh           - Mount remotes for browsing"

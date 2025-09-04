@@ -10,11 +10,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORDO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$ORDO_DIR/config/remotes.conf"
 LOG_FILE="$ORDO_DIR/logs/automount.log"
-MOUNT_BASE="$HOME/mounts"
-CACHE_DIR="$ORDO_DIR/cache"
-
+MOUNT_BASE="/media/$USER"
 # Ensure directories exist
-mkdir -p "$MOUNT_BASE" "$ORDO_DIR/logs" "$CACHE_DIR"
+sudo mkdir -p "$MOUNT_BASE" 2>/dev/null || mkdir -p "$HOME/mounts"  # Fallback if no sudo
+mkdir -p "$ORDO_DIR/logs"
 
 # Logging function
 log() {

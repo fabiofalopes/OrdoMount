@@ -6,7 +6,7 @@ main.spec
 
 # Ordo runtime directories - these are created automatically
 ordo/logs/
-ordo/cache/
+ordo/conflicts/
 ordo/config/remotes.conf
 
 # Mount directories (if created in repo)

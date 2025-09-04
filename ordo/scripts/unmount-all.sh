@@ -8,7 +8,7 @@ set -euo pipefail
 # Configuration - Auto-detect script location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORDO_DIR="$(dirname "$SCRIPT_DIR")"
-MOUNT_BASE="$HOME/mounts"
+MOUNT_BASE="/media/$USER"
 LOG_FILE="$ORDO_DIR/logs/unmount.log"
 
 # Ensure log directory exists
@@ -42,17 +42,17 @@ while IFS= read -r mount_point; do
     # Try graceful unmount first
     if fusermount -u "$mount_point" 2>/dev/null || umount "$mount_point" 2>/dev/null; then
         log "SUCCESS: Unmounted $remote_name"
-        ((unmounted_count++))
+        unmounted_count=$((unmounted_count + 1))
     else
         log "WARNING: Graceful unmount failed for $remote_name, trying force unmount"
         
         # Try force unmount
         if fusermount -uz "$mount_point" 2>/dev/null || umount -f "$mount_point" 2>/dev/null; then
             log "SUCCESS: Force unmounted $remote_name"
-            ((unmounted_count++))
+            unmounted_count=$((unmounted_count + 1))
         else
             log "ERROR: Failed to unmount $remote_name"
-            ((failed_count++))
+            failed_count=$((failed_count + 1))
         fi
     fi
     

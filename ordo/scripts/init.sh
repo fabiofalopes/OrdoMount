@@ -36,14 +36,24 @@ print_header "Creating Directory Structure"
 
 directories=(
     "$ORDO_DIR/logs"
-    "$ORDO_DIR/cache"
-    "$HOME/mounts"
+    "$ORDO_DIR/conflicts"
+    "/media/$USER"
 )
 
 for dir in "${directories[@]}"; do
     if [[ ! -d "$dir" ]]; then
-        mkdir -p "$dir"
-        print_success "Created: $dir"
+        if [[ "$dir" == "/media/$USER" ]]; then
+            # Try to create with sudo, fallback to home directory
+            if sudo mkdir -p "$dir" 2>/dev/null; then
+                print_success "Created: $dir"
+            else
+                mkdir -p "$HOME/mounts"
+                print_info "Created fallback: $HOME/mounts (no sudo access for /media/$USER)"
+            fi
+        else
+            mkdir -p "$dir"
+            print_success "Created: $dir"
+        fi
     else
         print_info "Already exists: $dir"
     fi
@@ -115,10 +125,26 @@ fi
 
 print_header "Next Steps"
 
-echo "1. Configure your remotes in: $config_file"
-echo "2. Run automount: $SCRIPT_DIR/automount.sh"
-echo "3. Check status: $SCRIPT_DIR/status.sh"
-echo
-echo "For help with any script, run it without arguments or check the README.md"
+echo "Ordo Hybrid Setup:"
+echo "=================="
+echo ""
+echo "1. REMOTE BROWSING (for exploring files):"
+echo "   - Configure remotes in: $config_file"
+echo "   - Run: $SCRIPT_DIR/automount.sh"
+echo "   - Browse at: /media/$USER/your-remote-name/"
+echo ""
+echo "2. LOCAL SYNC TARGETS (for applications):"
+echo "   - Setup sync: $SCRIPT_DIR/ordo-sync.sh init ~/ObsidianVaults/MyVault onedrive-f6388:Documents/ObsidianVaults/MyVault"
+echo "   - Point Obsidian to: ~/ObsidianVaults/MyVault/"
+echo "   - Start daemon: $SCRIPT_DIR/ordo-sync.sh daemon"
+echo ""
+echo "3. CHECK STATUS:"
+echo "   - Overall: $SCRIPT_DIR/status.sh"
+echo "   - Sync details: $SCRIPT_DIR/ordo-sync.sh status"
+echo ""
+echo "KEY PRINCIPLE:"
+echo "- Applications use LOCAL files (~/Documents/, ~/ObsidianVaults/)"
+echo "- Remote mounts are for BROWSING (/media/$USER/)"
+echo "- Background sync keeps local files current"
 
 print_success "Ordo initialization complete!"

@@ -207,11 +207,14 @@ sync_target() {
     if rclone help bisync >/dev/null 2>&1; then
         log "Using rclone bisync for bidirectional sync..."
         
-        # Check if this is first bisync (needs --resync)
+        # Check if this is first bisync (needs --resync) or forced by env
         local bisync_state_file="$local_path/.rclone-bisync-state"
         local bisync_flags=""
-        
-        if [[ ! -f "$bisync_state_file" ]]; then
+
+        if [[ "${ORDO_FORCE_RESYNC:-0}" == "1" ]]; then
+            log "Force resync requested via ORDO_FORCE_RESYNC=1"
+            bisync_flags="--resync"
+        elif [[ ! -f "$bisync_state_file" ]]; then
             log "First bisync - using --resync"
             bisync_flags="--resync"
         fi
@@ -243,13 +246,17 @@ sync_target() {
             fi
         fi
         
-        # Build exclusion flags from config file
+        # Build exclusion flags from config file (can be disabled via ORDO_USE_EXCLUDES=0)
         local exclude_flags=""
         local exclude_file="$ORDO_DIR/config/sync-excludes.conf"
-        
-        if [[ -f "$exclude_file" ]]; then
-            log "Using exclusions from: $exclude_file"
-            exclude_flags="--filter-from $exclude_file"
+
+        if [[ "${ORDO_USE_EXCLUDES:-1}" == "0" ]]; then
+            log "Exclusions disabled via ORDO_USE_EXCLUDES=0"
+        else
+            if [[ -f "$exclude_file" ]]; then
+                log "Using exclusions from: $exclude_file"
+                exclude_flags="--filter-from $exclude_file"
+            fi
         fi
         
         # Build resiliency flags
@@ -300,6 +307,27 @@ sync_target() {
                 return 0
             fi
         done
+
+        # If we get here, attempts failed. If not already using --resync,
+        # try a one-time recovery with --resync to rebuild missing listings.
+        if [[ "$bisync_flags" != *"--resync"* ]]; then
+            log "Bisync failed; attempting recovery with --resync"
+            if "${timeout_cmd[@]}" rclone bisync "$local_path" "$remote_path" \
+                --resync \
+                $exclude_flags \
+                "${resiliency_flags[@]}" \
+                --progress \
+                --log-file "$LOG_FILE" \
+                --log-level INFO \
+                --conflict-resolve newer \
+                --conflict-suffix "conflict-{DateOnly}-{TimeOnly}"; then
+                if [[ ! -f "$bisync_state_file" ]]; then
+                    touch "$bisync_state_file" || true
+                fi
+                log "✓ Bidirectional sync completed for $target_name (recovered with --resync)"
+                return 0
+            fi
+        fi
 
         log "✗ Bisync failed for $target_name"
         return 1
@@ -555,11 +583,15 @@ verify_targets() {
             continue
         fi
 
-        # Build filter-from if present
+        # Build filter-from if present (can be disabled via ORDO_USE_EXCLUDES=0)
         local exclude_file="$ORDO_DIR/config/sync-excludes.conf"
         local filter_args=()
-        if [[ -f "$exclude_file" ]]; then
-            filter_args+=(--filter-from "$exclude_file")
+        if [[ "${ORDO_USE_EXCLUDES:-1}" == "0" ]]; then
+            print_info "Verify: exclusions disabled via ORDO_USE_EXCLUDES=0"
+        else
+            if [[ -f "$exclude_file" ]]; then
+                filter_args+=(--filter-from "$exclude_file")
+            fi
         fi
 
         # Prefer a bisync dry-run to detect planned changes
@@ -619,6 +651,44 @@ case "${1:-}" in
         ;;
     "status")
         show_status
+        ;;
+    "report")
+        ordo_report() {
+            echo "Ordo Morning Report"
+            echo "===================="
+            echo "Date: $(date -Is)"
+            echo ""
+            if [[ -f "$CONFIG_FILE" ]]; then
+                while IFS='|' read -r local_path remote_path sync_frequency || [[ -n "$local_path" ]]; do
+                    [[ -z "$local_path" || "$local_path" =~ ^[[:space:]]*# ]] && continue
+                    name=$(basename "$local_path")
+                    echo "Target: $name"
+                    echo "  Local:  $local_path"
+                    echo "  Remote: $remote_path"
+                    # State marker
+                    if [[ -f "$local_path/.rclone-bisync-state" ]]; then
+                        print_success "State: bisync initialized"
+                    else
+                        print_warning "State: bisync state missing (needs --resync)"
+                    fi
+                    # Local stats
+                    files=$(find "$local_path" -type f 2>/dev/null | wc -l)
+                    size=$(du -sb "$local_path" 2>/dev/null | awk '{print $1}')
+                    echo "  Local files: $files"
+                    echo "  Local size:  ${size:-0} bytes"
+                    # Last log lines for this target
+                    if [[ -f "$LOG_FILE" ]]; then
+                        echo "  Last sync events:"
+                        grep -E "Bidirectional sync completed|Bisync successful|Signal received: terminated|✗ Bisync failed" "$LOG_FILE" | tail -n 3 | sed 's/^/    /' || true
+                    fi
+                    echo ""
+                done < "$CONFIG_FILE"
+            else
+                print_warning "No sync targets configured"
+            fi
+            echo "Tip: To compute remote size without blocking, run: nohup rclone size <remote> > /tmp/ordo_remote_size.txt &"
+        }
+        ordo_report
         ;;
     "conflicts")
         show_conflicts

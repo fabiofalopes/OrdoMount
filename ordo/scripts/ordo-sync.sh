@@ -528,9 +528,24 @@ show_conflicts() {
     echo "Conflict backups are in: $CONFLICT_DIR"
 }
 
+run_sync_all_safely() {
+    # Prevent overlapping sync_all runs using a simple flock on a lockfile
+    local lock_file="$ORDO_DIR/logs/sync_all.lock"
+    exec 9>>"$lock_file"
+    if flock -n 9; then
+        log "sync_all starting (guarded)"
+        sync_all >/dev/null 2>&1 || true
+        log "sync_all finished (guarded)"
+        flock -u 9 || true
+    else
+        log "sync_all skipped (another run in progress)"
+    fi
+}
+
 # Start sync daemon
 start_daemon() {
-    local interval="${1:-300}"  # Default 5 minutes
+    local interval="${1:-300}"  # Default 5 minutes (fallback for polling mode)
+    local remote_poll_interval="${ORDO_REMOTE_POLL_INTERVAL:-300}"  # Also poll for remote-initiated changes
     
     if [[ ! -f "$CONFIG_FILE" ]]; then
         print_error "No sync targets configured"
@@ -538,19 +553,99 @@ start_daemon() {
         exit 1
     fi
     
-    log "Starting Ordo sync daemon (interval: ${interval}s)"
-    print_info "Ordo sync daemon started (interval: ${interval}s)"
-    print_info "Press Ctrl+C to stop"
-    
-    # Trap to handle graceful shutdown
-    trap 'log "Sync daemon stopped"; print_info "Sync daemon stopped"; exit 0' INT TERM
-    
-    while true; do
-        log "Daemon sync cycle starting..."
-        sync_all >/dev/null 2>&1
-        log "Daemon sync cycle completed, sleeping ${interval}s..."
-        sleep "$interval"
-    done
+    # Check if inotifywait is available for file watching
+    if command -v inotifywait &> /dev/null; then
+        log "Starting Ordo sync daemon with file watching (responsive mode)"
+        print_info "Ordo sync daemon started (responsive file watching mode)"
+        print_info "Changes will be synced immediately. Press Ctrl+C to stop"
+        
+        # Trap to handle graceful shutdown
+        trap 'log "Sync daemon stopped"; print_info "Sync daemon stopped"; exit 0' INT TERM
+        
+    # Build inotifywait command for all local paths
+        local watch_paths=""
+        local debounce_file="$ORDO_DIR/.sync_debounce"
+    local -a watch_list=()
+        
+        while IFS='|' read -r local_path remote_path freq; do
+            # Skip comments and empty lines
+            [[ "$local_path" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$local_path" ]] && continue
+            
+            # Expand ~ in path
+            local_path="${local_path/#\~/$HOME}"
+            
+            if [[ -d "$local_path" ]]; then
+                watch_paths="$watch_paths $local_path"
+                watch_list+=("$local_path")
+            fi
+        done < "$CONFIG_FILE"
+        
+        if [[ -z "$watch_paths" ]]; then
+            print_error "No valid local directories to watch"
+            exit 1
+        fi
+        
+        log "Watching directories:$watch_paths"
+        
+        # Start a background remote poller to pick up remote-side changes even when watching locally
+        if [[ "$remote_poll_interval" =~ ^[0-9]+$ ]] && [[ "$remote_poll_interval" -gt 0 ]]; then
+            (
+                trap 'exit 0' INT TERM
+                while true; do
+                    sleep "$remote_poll_interval"
+                    log "Remote poll tick: triggering sync_all to pick up remote changes"
+                    run_sync_all_safely
+                done
+            ) &
+            local poller_pid=$!
+            log "Remote polling enabled every ${remote_poll_interval}s (PID=$poller_pid)"
+        else
+            log "Remote polling disabled (ORDO_REMOTE_POLL_INTERVAL=$remote_poll_interval)"
+        fi
+
+        # Use inotifywait to monitor file changes
+        inotifywait -mrq \
+            --format '%w%f %e' \
+            --event create,delete,modify,move,close_write,attrib,moved_from,moved_to \
+            $watch_paths | \
+        while read -r file event; do
+            # Skip events on temporary files, cache, etc.
+            [[ "$file" =~ \.(tmp|swp|lock)$ ]] && continue
+            [[ "$file" =~ /~\$ ]] && continue  # Office temp files
+            [[ "$file" =~ /\.git/ ]] && continue
+            [[ "$file" =~ /node_modules/ ]] && continue
+            [[ "$file" =~ /__pycache__/ ]] && continue
+            
+            log "File change detected: $file ($event)"
+            
+            # Debounce: wait a bit and check if more changes are coming
+            touch "$debounce_file"
+            sleep 2  # Wait 2 seconds for more changes
+            
+            if [[ -f "$debounce_file" ]]; then
+                rm -f "$debounce_file"
+                log "Triggering sync due to file changes..."
+                run_sync_all_safely
+                log "Sync completed after file changes"
+            fi
+        done
+    else
+        # Fallback to polling mode
+        log "Starting Ordo sync daemon (polling mode, interval: ${interval}s)"
+        print_info "Ordo sync daemon started (polling mode, interval: ${interval}s)"
+        print_info "Install inotify-tools for responsive file watching. Press Ctrl+C to stop"
+        
+        # Trap to handle graceful shutdown
+        trap 'log "Sync daemon stopped"; print_info "Sync daemon stopped"; exit 0' INT TERM
+        
+        while true; do
+            log "Daemon sync cycle starting..."
+            run_sync_all_safely
+            log "Daemon sync cycle completed, sleeping ${interval}s..."
+            sleep "$interval"
+        done
+    fi
 }
 
 # Verify sync status for all targets without making changes

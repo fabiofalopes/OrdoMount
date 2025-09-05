@@ -130,6 +130,33 @@ rm -rf ~/test-sync
 **Symptoms**:
 - Script starts but produces no output
 - No error messages or progress indicators
+
+## Updates – September 5, 2025
+
+### Incident: Bisync aborted due to missing listings; perceived freezes
+- Symptoms:
+   - Log showed: `Bisync critical error: cannot find prior Path1 or Path2 listings ... Must run --resync to recover.`
+   - Wrapper initially retried normal runs; then attempted recovery `--resync`.
+   - Terminal appeared “frozen” while rclone was actively computing listings (quiet phase, high CPU).
+- Root cause:
+   - Prior run didn’t leave `~/.cache/rclone/bisync/home_fabio_Documents..onedrive-f6388_Documents.path{1,2}.lst` present.
+   - Dry-run/verify during resync phases can also trip the “missing listings” check.
+- Actions:
+   - Added a forced resync path: `ORDO_FORCE_RESYNC=1` supported by `scripts/ordo-sync.sh` to pass `--resync` regardless of marker presence.
+   - Kicked a clean `rclone bisync --resync` (no external timeout) and let it complete.
+   - Avoided parallel bisyncs; ensured stale lock cleanup logic stayed in place.
+- Verification:
+   - Observed new copies logged (e.g., `.obsidian/workspace.json`).
+   - After completion, new test files appeared on OneDrive Web and then locally.
+   - `verify` reports “In sync” when idle.
+- Lessons:
+   - Don’t interrupt a `--resync`—it rebuilds the listings; interruption leads to repeated aborts.
+   - Quiet logs don’t mean a hang; check CPU and log mtime.
+   - Keep external wrapper timeouts disabled for first runs; use log-based monitoring.
+
+### Commands (today)
+```bash
+# Inspect work dir and start recovery resync (detached)
 - Appears to hang immediately after execution
 - Manual rclone commands work perfectly when run directly
 - Timeout commands would eventually kill the process
@@ -145,6 +172,12 @@ rm -rf ~/test-sync
 - `((total_count++))` returns the OLD value (0) before incrementing
 - When old value is 0, bash returns exit code 1
 - `set -e` interprets this as command failure and exits script
+```
+
+### Next improvements
+- Consider enabling a periodic daemon run with a conservative interval (e.g., 5–10 minutes) to smooth propagation.
+- Keep excludes on by default; toggle off only for manual sweeps.
+- Add a tiny health-check that alerts if `.path{1,2}.lst` go missing again.
 - Script exits silently before any sync operations begin
 
 **Solution Applied**:

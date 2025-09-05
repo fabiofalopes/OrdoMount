@@ -1,5 +1,44 @@
 # 🚧 Ordo Production Ready Status
 
+## 🗓️ Today’s outcome — 2025-09-05
+
+- Recovered rclone bisync state with a clean `--resync` (don’t interrupt). This rebuilt the missing listings in `~/.cache/rclone/bisync/…path{1,2}.lst`.
+- Small-file propagation is back: a file created on the Mac appeared in OneDrive Web and then locally; a local note appeared in OneDrive after the recovery.
+- Sync wrapper hardened further:
+   - Retry/backoff and stale lock cleanup remain in place.
+   - Added ORDO_FORCE_RESYNC=1 to force `--resync` when needed.
+   - Verify and Report commands documented below; excludes toggle (ORDO_USE_EXCLUDES) retained.
+- Monitoring showed that “frozen” terminals were just quiet phases (listing/compare) while rclone was active (high CPU). Use log timestamps instead of assuming a hang.
+
+### ✅ Stability checklist (quick)
+- [ ] Only one bisync instance running (check PID and lock file).
+- [ ] No external shell timeout killing long runs.
+- [ ] First-run or recovery `--resync` completed without interruption.
+- [ ] `.rclone-bisync-state` present on the local path after success.
+- [ ] Exclusions file correct for your use case.
+- [ ] `./scripts/ordo-sync.sh verify` reports “In sync”.
+
+### 🛠️ Operational runbook (lean)
+- Start a sync once: `./scripts/ordo-sync.sh sync`
+- Force a recovery resync: `ORDO_FORCE_RESYNC=1 ./scripts/ordo-sync.sh sync`
+- Verify safely (no changes): `./scripts/ordo-sync.sh verify`
+- Morning snapshot: `./scripts/ordo-sync.sh report`
+- Background daemon (periodic): `./scripts/ordo-sync.sh daemon`
+- Toggle exclusions:
+   - With filters (default): `ORDO_USE_EXCLUDES=1 ./scripts/ordo-sync.sh sync`
+   - Literal (no filters): `ORDO_USE_EXCLUDES=0 ./scripts/ordo-sync.sh sync`
+
+Monitoring tips:
+- Check if rclone is working: `pgrep -fa "rclone bisync"`
+- Inspect work dir: `rclone lsl "$HOME/.cache/rclone/bisync"`
+- Tail progress: `tail -n 100 -f ordo/logs/ordo-sync.log` (look for timestamp changes)
+- If a lock lingers but PID is gone, the wrapper will clean it on next run.
+
+Known gotchas:
+- If logs show “Bisync aborted. Must run --resync to recover.”, run a clean `--resync` (or use ORDO_FORCE_RESYNC=1 via the wrapper) and let it finish.
+- Avoid running multiple bisyncs in parallel on the same pair.
+- OneDrive may delay server-side indexing; give it a few minutes before verifying via web UI.
+
 ## 🎯 Current Status: Implementation Phase
 
 Ordo architecture has been designed and streamlined, but real-world testing revealed critical issues that need resolution before production deployment.

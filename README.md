@@ -12,6 +12,18 @@ cd OrdoMount
 ./ordo/setup.sh
 ```
 
+Prerequisites (Debian/Ubuntu):
+```bash
+sudo apt update
+sudo apt install -y rclone fuse3 inotify-tools
+```
+
+Then configure rclone remotes (OneDrive/Google Drive/etc.):
+```bash
+rclone config
+# Create a remote, e.g. "onedrive-f6388" or "g-drive-f6388" and complete the OAuth flow
+```
+
 What setup does:
 - Initializes directories and config
 - Optionally mounts remotes for browsing under `/media/$USER/<remote>/`
@@ -41,6 +53,40 @@ Add a new sync target:
 ./ordo/scripts/ordo-sync.sh init ~/Documents/MyProject g-drive-f6388:Projects/MyProject 300
 ```
 
+Tip: replace `g-drive-f6388` with your own rclone remote name, e.g. `onedrive-f6388:Documents/MyProject`.
+
+## Dependencies
+
+- rclone (configured via `rclone config`)
+- FUSE3 (for optional mounts)
+- inotify-tools (for responsive file watching in daemon mode)
+
+Install on Debian/Ubuntu:
+```bash
+sudo apt update
+sudo apt install -y rclone fuse3 inotify-tools
+```
+
+## Persistent Daemon (optional)
+
+Run the sync daemon on login and restart on failure using a user service:
+
+1) Copy the service file to your user systemd directory
+```bash
+mkdir -p ~/.config/systemd/user
+cp ordo/systemd/ordo-sync.service ~/.config/systemd/user/
+```
+
+2) Enable and start
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now ordo-sync.service
+loginctl enable-linger "$USER"   # optional: keep running after logout
+```
+
+Tune remote pull cadence (remote → local latency) by setting an environment variable in the service file:
+- `Environment=ORDO_REMOTE_POLL_INTERVAL=120` (recommended 60–120s during active hours; 300–600s otherwise)
+
 ## Architecture
 
 Two‑tier system:
@@ -66,11 +112,15 @@ Key philosophy: applications must point to local paths only. Never point apps to
 - rclone installed and configured (`rclone config`)
 - Sufficient local disk space for your sync targets
 
+Recommended extras:
+- inotify-tools (for immediate sync on local file changes)
+
 ## Docs
 
 - Getting started and concepts: `ordo/README.md`
 - Analysis and plan: `docs/ANALYSIS-AND-STREAMLINED-PLAN.md`
 - Implementation summary: `docs/IMPLEMENTATION-SUMMARY.md`
+- State report (today): `docs/STATE-REPORT-2025-09-05.md`
 - Exploration/testing log: `ordo/EXPLORATION-LOG.md`
 - Production readiness: `ordo/PRODUCTION-READY.md`
 - rclone command reference: `docs/rclone_commands_reference.md`

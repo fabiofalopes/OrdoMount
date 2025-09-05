@@ -1,0 +1,21 @@
+[Unit]
+Description=Ordo Sync Daemon (watch + remote poll)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Tune remote pull cadence during work hours; raise to 300–600 when idle
+Environment=ORDO_REMOTE_POLL_INTERVAL=120
+# Keep large initial syncs unconstrained; set to a value only if needed
+Environment=ORDO_BISYNC_TIMEOUT_SEC=0
+# Keep excludes on for normal runs
+Environment=ORDO_USE_EXCLUDES=1
+WorkingDirectory=/home/fabio/projetos/hub/OrdoMount/ordo/scripts
+ExecStart=/bin/bash -lc './ordo-sync.sh daemon 300'
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

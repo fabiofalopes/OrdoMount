@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Block committing KeePass vaults and cache artifacts
+set -euo pipefail
+
+# Files to forbid
+forbidden_patterns=(".kdbx" "/ordo/cache/")
+
+# Evaluate staged changes; allow deletions of forbidden files
+blocked=0
+while IFS= read -r line; do
+  # Format: <status><whitespace><path>  (from --name-status)
+  status=$(echo "$line" | awk '{print $1}')
+  path=$(echo "$line" | cut -f2-)
+  [[ -z "$path" ]] && continue
+
+  for pat in "${forbidden_patterns[@]}"; do
+    if [[ "$path" == *"$pat"* ]]; then
+      # Allow deletions (status D) so we can purge leaked files
+      if [[ "$status" == D ]]; then
+        echo "[pre-commit] Allowing deletion of $path (matches $pat)"
+        continue
+      fi
+      echo "[pre-commit] Blocking commit: $path matches pattern $pat (status=$status)"
+      blocked=1
+    fi
+  done
+done < <(git diff --cached --name-status)
+
+if [[ $blocked -eq 1 ]]; then
+  cat <<'EOF'
+[pre-commit] Commit blocked. Reason: sensitive artifacts detected.
+- KeePass .kdbx files and /ordo/cache should never be ADDED or MODIFIED.
+- Deletions are allowed (purging history / cleaning repo).
+To proceed (not recommended), bypass with: git commit --no-verify
+EOF
+  exit 1
+fi
+
+exit 0

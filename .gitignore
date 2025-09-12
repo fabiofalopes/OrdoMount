@@ -11,3 +11,7 @@ ordo/config/remotes.conf
 
 # Mount directories (if created in repo)
 mounts/
+
+# Prevent committing cache and encrypted vaults
+ordo/cache/
+**/*.kdbx

@@ -13,5 +13,6 @@ ordo/config/remotes.conf
 mounts/
 
 # Prevent committing cache and encrypted vaults
+cache/
 ordo/cache/
 **/*.kdbx

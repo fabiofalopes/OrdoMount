@@ -10,7 +10,7 @@ Date: 2025-09-08
   - Remote: `onedrive-f6388:Documents/`
   - Frequency: `100s` (from `ordo/config/sync-targets.conf`)
 - Manual sync works: a one-time `sync` run completed successfully just now and shows “Bidirectional sync completed”.
-- Auto-sync service: a user-level systemd unit exists in repo at `ordo/systemd/ordo-sync.service`, but it’s not installed/enabled yet (no running service was found).
+- Auto-sync service: systemd user units exist in repo under `ordo/systemd/` and can be installed/enabled (recommended: run `ordo/scripts/setup-systemd.sh`).
 - Daemon behavior: `./ordo-sync.sh daemon` uses inotify for instant local change detection when `inotifywait` is available, plus periodic remote polling (`ORDO_REMOTE_POLL_INTERVAL`, default 300s or 120s in the service file).
 
 ## Goal
@@ -28,7 +28,23 @@ cd /home/fabio/projetos/hub/OrdoMount/ordo/scripts
 
 - Stop with Ctrl+C. For a background session, use tmux/screen or `nohup`.
 
-## Option B — Enable auto-start at login via systemd (recommended)
+## Option B — Enable auto-start on boot via systemd user service (recommended)
+
+### Quick install (recommended)
+
+Run the installer (idempotent):
+
+```bash
+/home/fabio/projetos/hub/OrdoMount/ordo/scripts/setup-systemd.sh
+```
+
+Dry-run:
+
+```bash
+/home/fabio/projetos/hub/OrdoMount/ordo/scripts/setup-systemd.sh --dry-run
+```
+
+### Manual install
 
 1) Ensure inotify tools (for instant local change detection):
 
@@ -47,13 +63,16 @@ sudo apt-get update && sudo apt-get install -y inotify-tools
 mkdir -p ~/.config/systemd/user
 install -m 644 /home/fabio/projetos/hub/OrdoMount/ordo/systemd/ordo-sync.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now ordo-sync.service
+systemctl --user enable ordo-sync.service
+systemctl --user start --no-block ordo-sync.service
 ```
 
-3) (Optional) Keep running even after logout:
+Note: this service uses systemd watchdog. Ensure `systemd-notify` is available (normally installed with systemd).
+
+3) Enable boot start (required for start-on-boot):
 
 ```bash
-# Requires your user to be allowed lingering
+# Keep user services running at boot and after logout
 loginctl enable-linger "$USER"
 ```
 
@@ -61,9 +80,29 @@ loginctl enable-linger "$USER"
 
 ```bash
 systemctl --user status --no-pager ordo-sync.service
+systemctl --user show ordo-sync.service -p Type -p WatchdogUSec -p NotifyAccess -p WatchdogTimestamp
 journalctl --user -u ordo-sync.service -e --no-pager
-# Ordo sync log
+
+# Ordo sync file log
 tail -n 200 /home/fabio/projetos/hub/OrdoMount/ordo/logs/ordo-sync.log
+```
+
+## Log rotation (recommended)
+
+Ordo writes an rclone-backed file log at `ordo/logs/ordo-sync.log`. Enable the provided user-level timer to rotate logs daily:
+
+```bash
+chmod +x /home/fabio/projetos/hub/OrdoMount/ordo/scripts/ordo-logrotate.sh
+install -m 644 /home/fabio/projetos/hub/OrdoMount/ordo/systemd/ordo-logrotate.service ~/.config/systemd/user/
+install -m 644 /home/fabio/projetos/hub/OrdoMount/ordo/systemd/ordo-logrotate.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ordo-logrotate.timer
+```
+
+Force a run:
+
+```bash
+systemctl --user start ordo-logrotate.service
 ```
 
 ## Customize behavior
@@ -72,6 +111,8 @@ tail -n 200 /home/fabio/projetos/hub/OrdoMount/ordo/logs/ordo-sync.log
   - `ORDO_REMOTE_POLL_INTERVAL=120` (poll remote every 2 min)
   - `ORDO_BISYNC_TIMEOUT_SEC=0` (no external timeout)
   - `ORDO_USE_EXCLUDES=1` (use `ordo/config/sync-excludes.conf` if present)
+  - `ORDO_DEBOUNCE_SEC=2` (coalesce bursts of local file events)
+  - `ORDO_MIN_SYNC_INTERVAL_SEC=30` (rate limit sync runs)
 - To adjust, edit your copy in `~/.config/systemd/user/ordo-sync.service`, then:
 
 ```bash
@@ -90,7 +131,18 @@ cd /home/fabio/projetos/hub/OrdoMount/ordo/scripts && ./ordo-sync.sh sync
 
 # Dry-run verification of drift
 ./ordo-sync.sh verify
+
+# Daemon health / state (reads the daemon state file)
+./ordo-sync.sh health
 ```
+
+## Daemon state file
+
+The daemon writes a small key/value state file for quick health checks:
+
+- Path: `$XDG_RUNTIME_DIR/ordo/sync/daemon.state` (or `$XDG_CACHE_HOME/ordo/sync/daemon.state`, or `~/.cache/ordo/sync/daemon.state`)
+- Used by: `./ordo-sync.sh health`
+- Staleness: `health` exits non-zero if `updated_at` is older than 300 seconds
 
 ## Add or change sync targets
 
@@ -145,5 +197,6 @@ journalctl --user -u ordo-sync.service -e --no-pager
 
 ## Summary
 
-- Current state: manual sync works; auto-sync not yet enabled as a systemd user service.
-- Do this to finish: install the provided unit, enable and start it (Option B). That gives continuous syncing with instant local change detection and periodic remote polling.
+- Recommended path: run `/home/fabio/projetos/hub/OrdoMount/ordo/scripts/setup-systemd.sh`.
+- Ensure boot start: `loginctl enable-linger "$USER"`.
+- Enable `ordo-logrotate.timer` to keep `ordo/logs/*.log` bounded.

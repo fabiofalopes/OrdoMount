@@ -1,0 +1,8 @@
+[Unit]
+Description=Ordo log rotation
+
+[Service]
+Type=oneshot
+ExecStart=%h/projetos/hub/OrdoMount/ordo/scripts/ordo-logrotate.sh
+Nice=10
+IOSchedulingClass=idle

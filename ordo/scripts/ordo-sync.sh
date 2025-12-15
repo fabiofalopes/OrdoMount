@@ -7,8 +7,10 @@
 #   init <local-path> <remote-path>  - Setup new sync target
 #   sync [target]                    - One-time sync (all if no target)
 #   daemon [interval]                - Background sync daemon
-#   status                          - Show sync status
-#   conflicts                       - Show/resolve conflicts
+#   status                           - Show sync status
+#   verify                           - Dry-run check if targets are in sync
+#   health                           - Show daemon state/health
+#   conflicts                        - Show/resolve conflicts
 
 set -euo pipefail
 
@@ -19,6 +21,10 @@ CONFIG_FILE="$ORDO_DIR/config/sync-targets.conf"
 LOG_FILE="$ORDO_DIR/logs/ordo-sync.log"
 CONFLICT_DIR="$ORDO_DIR/conflicts"
 
+STATE_BASE_DIR="${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}/ordo"
+STATE_DIR="$STATE_BASE_DIR/sync"
+STATE_FILE="$STATE_DIR/daemon.state"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,11 +33,128 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Ensure directories exist
-mkdir -p "$ORDO_DIR/logs" "$ORDO_DIR/config" "$CONFLICT_DIR"
+mkdir -p "$ORDO_DIR/logs" "$ORDO_DIR/config" "$CONFLICT_DIR" "$STATE_DIR"
 
 # Logging function
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+SYSTEMD_WATCHDOG_PID=""
+
+systemd_notify() {
+    if [[ -n "${NOTIFY_SOCKET:-}" ]] && command -v systemd-notify >/dev/null 2>&1; then
+        systemd-notify "$@" >/dev/null 2>&1 || true
+    fi
+}
+
+systemd_watchdog_start() {
+    if [[ -z "${NOTIFY_SOCKET:-}" ]] || ! command -v systemd-notify >/dev/null 2>&1; then
+        return 0
+    fi
+
+    systemd_notify --ready --status="Ordo sync daemon started"
+
+    local watchdog_usec="${WATCHDOG_USEC:-0}"
+    if [[ "$watchdog_usec" =~ ^[0-9]+$ ]] && [[ "$watchdog_usec" -gt 0 ]]; then
+        local interval_sec=$(( (watchdog_usec / 1000000) / 2 ))
+        if [[ "$interval_sec" -lt 1 ]]; then
+            interval_sec=1
+        fi
+
+        (
+            trap 'exit 0' INT TERM
+            while true; do
+                sleep "$interval_sec"
+                # Do not overwrite Status=; keep last meaningful status.
+                systemd_notify WATCHDOG=1
+            done
+        ) &
+        SYSTEMD_WATCHDOG_PID=$!
+    fi
+}
+
+systemd_watchdog_stop() {
+    if [[ -n "${SYSTEMD_WATCHDOG_PID:-}" ]]; then
+        kill "$SYSTEMD_WATCHDOG_PID" >/dev/null 2>&1 || true
+        wait "$SYSTEMD_WATCHDOG_PID" >/dev/null 2>&1 || true
+        SYSTEMD_WATCHDOG_PID=""
+    fi
+}
+
+state_write_kv() {
+    local tmp
+    tmp=$(mktemp "$STATE_FILE.tmp.XXXXXX")
+
+    {
+        echo "updated_at=$(date -Is)"
+        for kv in "$@"; do
+            echo "$kv"
+        done
+    } >"$tmp"
+
+    mv -f "$tmp" "$STATE_FILE"
+}
+
+state_touch() {
+    # Refresh updated_at without changing anything else.
+    if [[ ! -f "$STATE_FILE" ]]; then
+        state_write_kv "status=unknown" || true
+        return 0
+    fi
+
+    local status_val
+    local mode_val
+    status_val=$(state_read_value status 2>/dev/null || true)
+    mode_val=$(state_read_value mode 2>/dev/null || true)
+
+    local -a kvs=()
+    if [[ -n "${status_val:-}" ]]; then
+        kvs+=("status=$status_val")
+    fi
+    if [[ -n "${mode_val:-}" ]]; then
+        kvs+=("mode=$mode_val")
+    fi
+
+    state_write_kv "${kvs[@]}" || true
+}
+
+state_read_value() {
+    local key="$1"
+    if [[ ! -f "$STATE_FILE" ]]; then
+        return 1
+    fi
+
+    # key=value lines; ignore comments/empty
+    grep -E "^${key}=" "$STATE_FILE" 2>/dev/null | head -n 1 | cut -d'=' -f2- || true
+}
+
+sync_set_status() {
+    local status="$1"
+    shift || true
+
+    state_write_kv "status=$status" "$@" || true
+
+    # Update systemd Status= field when running under systemd.
+    if [[ -n "${NOTIFY_SOCKET:-}" ]]; then
+        systemd_notify --status="Ordo: $status"
+    fi
+}
+
+state_heartbeat_loop() {
+    local mode="$1"
+    local interval_sec="${2:-30}"
+
+    if [[ ! "$interval_sec" =~ ^[0-9]+$ ]] || [[ "$interval_sec" -lt 5 ]]; then
+        interval_sec=30
+    fi
+
+    trap 'exit 0' INT TERM
+    while true; do
+        sleep "$interval_sec"
+
+        state_touch || true
+    done
 }
 
 # Print functions
@@ -532,13 +655,17 @@ run_sync_all_safely() {
     # Prevent overlapping sync_all runs using a simple flock on a lockfile
     local lock_file="$ORDO_DIR/logs/sync_all.lock"
     exec 9>>"$lock_file"
+
     if flock -n 9; then
+        sync_set_status "syncing" "mode=sync_all" "lock=acquired"
         log "sync_all starting (guarded)"
         sync_all >/dev/null 2>&1 || true
         log "sync_all finished (guarded)"
+        sync_set_status "idle" "mode=watch" "lock=released"
         flock -u 9 || true
     else
         log "sync_all skipped (another run in progress)"
+        sync_set_status "busy" "mode=watch" "lock=contended"
     fi
 }
 
@@ -546,48 +673,64 @@ run_sync_all_safely() {
 start_daemon() {
     local interval="${1:-300}"  # Default 5 minutes (fallback for polling mode)
     local remote_poll_interval="${ORDO_REMOTE_POLL_INTERVAL:-300}"  # Also poll for remote-initiated changes
-    
+
+    # Inotify coalescing:
+    # - Debounce collects bursts of editor save events.
+    # - Minimum interval prevents sync storms from chatty editors.
+    local debounce_sec="${ORDO_DEBOUNCE_SEC:-2}"
+    local min_sync_interval_sec="${ORDO_MIN_SYNC_INTERVAL_SEC:-30}"
+
     if [[ ! -f "$CONFIG_FILE" ]]; then
         print_error "No sync targets configured"
         echo "Use: ./ordo-sync.sh init <local-path> <remote-path>"
         exit 1
     fi
-    
+
     # Check if inotifywait is available for file watching
     if command -v inotifywait &> /dev/null; then
         log "Starting Ordo sync daemon with file watching (responsive mode)"
         print_info "Ordo sync daemon started (responsive file watching mode)"
-        print_info "Changes will be synced immediately. Press Ctrl+C to stop"
-        
+        print_info "Changes will be synced automatically. Press Ctrl+C to stop"
+
+        local -a watch_paths=()
+        local poller_pid=""
+        local heartbeat_pid=""
+        local burst_deadline_epoch=0
+        local last_sync_epoch=0
+
+        sync_set_status "starting" "mode=watch" "remote_poll_interval=${remote_poll_interval}s" "min_sync_interval=${min_sync_interval_sec}s" "debounce=${debounce_sec}s"
+
         # Trap to handle graceful shutdown
-        trap 'log "Sync daemon stopped"; print_info "Sync daemon stopped"; exit 0' INT TERM
-        
-    # Build inotifywait command for all local paths
-        local watch_paths=""
-        local debounce_file="$ORDO_DIR/.sync_debounce"
-    local -a watch_list=()
-        
+        trap 'systemd_watchdog_stop; [[ -n "${heartbeat_pid:-}" ]] && kill "$heartbeat_pid" >/dev/null 2>&1 || true; [[ -n "${poller_pid:-}" ]] && kill "$poller_pid" >/dev/null 2>&1 || true; sync_set_status "stopped" "mode=watch"; log "Sync daemon stopped"; print_info "Sync daemon stopped"; exit 0' INT TERM
+
+        systemd_watchdog_start
+
+        # Periodically refresh daemon state (for `health`).
+        ( state_heartbeat_loop watch 30 ) &
+        heartbeat_pid=$!
+
+        # Build inotifywait watch list for all local paths
         while IFS='|' read -r local_path remote_path freq; do
             # Skip comments and empty lines
             [[ "$local_path" =~ ^[[:space:]]*# ]] && continue
             [[ -z "$local_path" ]] && continue
-            
+
             # Expand ~ in path
             local_path="${local_path/#\~/$HOME}"
-            
+
             if [[ -d "$local_path" ]]; then
-                watch_paths="$watch_paths $local_path"
-                watch_list+=("$local_path")
+                watch_paths+=("$local_path")
             fi
         done < "$CONFIG_FILE"
-        
-        if [[ -z "$watch_paths" ]]; then
+
+        if (( ${#watch_paths[@]} == 0 )); then
             print_error "No valid local directories to watch"
             exit 1
         fi
-        
-        log "Watching directories:$watch_paths"
-        
+
+        log "Watching directories: ${watch_paths[*]}"
+        sync_set_status "watching" "mode=watch" "watch_paths=${#watch_paths[@]}"
+
         # Start a background remote poller to pick up remote-side changes even when watching locally
         if [[ "$remote_poll_interval" =~ ^[0-9]+$ ]] && [[ "$remote_poll_interval" -gt 0 ]]; then
             (
@@ -598,51 +741,108 @@ start_daemon() {
                     run_sync_all_safely
                 done
             ) &
-            local poller_pid=$!
+            poller_pid=$!
             log "Remote polling enabled every ${remote_poll_interval}s (PID=$poller_pid)"
         else
             log "Remote polling disabled (ORDO_REMOTE_POLL_INTERVAL=$remote_poll_interval)"
         fi
 
-        # Use inotifywait to monitor file changes
-        inotifywait -mrq \
-            --format '%w%f %e' \
-            --event create,delete,modify,move,close_write,attrib,moved_from,moved_to \
-            $watch_paths | \
-        while read -r file event; do
-            # Skip events on temporary files, cache, etc.
-            [[ "$file" =~ \.(tmp|swp|lock)$ ]] && continue
-            [[ "$file" =~ /~\$ ]] && continue  # Office temp files
-            [[ "$file" =~ /\.git/ ]] && continue
-            [[ "$file" =~ /node_modules/ ]] && continue
-            [[ "$file" =~ /__pycache__/ ]] && continue
-            
-            log "File change detected: $file ($event)"
-            
-            # Debounce: wait a bit and check if more changes are coming
-            touch "$debounce_file"
-            sleep 2  # Wait 2 seconds for more changes
-            
-            if [[ -f "$debounce_file" ]]; then
-                rm -f "$debounce_file"
-                log "Triggering sync due to file changes..."
-                run_sync_all_safely
-                log "Sync completed after file changes"
+        # Coalesce sync triggers:
+        # - Use `inotifywait -t 1` so we can decide when a burst is "quiet".
+        # - Each event extends the burst deadline by `debounce_sec`.
+        # - When we cross the deadline, trigger a single guarded sync.
+        local -a inotify_cmd=(
+            inotifywait -mrq -t 1
+            --format $'%w%f\t%e'
+            --event create,delete,modify,move,close_write,attrib,moved_from,moved_to
+            "${watch_paths[@]}"
+        )
+
+        local burst_count=0
+
+        while true; do
+            local file=""
+            local event=""
+
+            if IFS=$'\t' read -r file event < <("${inotify_cmd[@]}"); then
+                # Got an event.
+                if [[ -z "${file:-}" ]]; then
+                    continue
+                fi
+
+                # Skip events on temporary files, cache, etc.
+                [[ "$file" =~ \.(tmp|swp|lock)$ ]] && continue
+                [[ "$file" =~ /~\$ ]] && continue  # Office temp files
+                [[ "$file" =~ /\.git/ ]] && continue
+                [[ "$file" =~ /node_modules/ ]] && continue
+                [[ "$file" =~ /__pycache__/ ]] && continue
+
+                local now_epoch
+                now_epoch=$(date +%s)
+
+                burst_count=$((burst_count + 1))
+                burst_deadline_epoch=$((now_epoch + debounce_sec))
+
+                if (( burst_count == 1 )); then
+                    log "File change burst started: $file ($event)"
+                    sync_set_status "burst" "mode=watch" "file=$file" "event=$event"
+                fi
+                continue
             fi
+
+            # Timeout: check if a burst has settled.
+            if (( burst_count == 0 )); then
+                continue
+            fi
+
+            local now_epoch
+            now_epoch=$(date +%s)
+            if (( now_epoch < burst_deadline_epoch )); then
+                continue
+            fi
+
+            # Burst settled; decide if we can run sync now.
+            if (( last_sync_epoch > 0 )) && (( now_epoch - last_sync_epoch < min_sync_interval_sec )); then
+                local remaining=$((min_sync_interval_sec - (now_epoch - last_sync_epoch)))
+                log "Change burst settled; rate-limited. Next sync allowed in ${remaining}s."
+                sync_set_status "rate_limited" "mode=watch" "events=${burst_count}" "next_sync_in=${remaining}s"
+                burst_deadline_epoch=$((now_epoch + remaining))
+                continue
+            fi
+
+            log "Change burst settled; triggering sync (events=${burst_count})"
+            sync_set_status "triggered" "mode=watch" "events=${burst_count}"
+            burst_count=0
+            burst_deadline_epoch=0
+
+            run_sync_all_safely
+            last_sync_epoch=$(date +%s)
+            sync_set_status "watching" "mode=watch" "last_sync_epoch=${last_sync_epoch}"
         done
     else
         # Fallback to polling mode
         log "Starting Ordo sync daemon (polling mode, interval: ${interval}s)"
         print_info "Ordo sync daemon started (polling mode, interval: ${interval}s)"
         print_info "Install inotify-tools for responsive file watching. Press Ctrl+C to stop"
-        
+
+        sync_set_status "polling" "mode=poll" "interval=${interval}s"
+
+        local heartbeat_pid=""
+
         # Trap to handle graceful shutdown
-        trap 'log "Sync daemon stopped"; print_info "Sync daemon stopped"; exit 0' INT TERM
-        
+        trap 'systemd_watchdog_stop; [[ -n "${heartbeat_pid:-}" ]] && kill "$heartbeat_pid" >/dev/null 2>&1 || true; sync_set_status "stopped" "mode=poll"; log "Sync daemon stopped"; print_info "Sync daemon stopped"; exit 0' INT TERM
+
+        systemd_watchdog_start
+
+        # Periodically refresh daemon state (for `health`).
+        ( state_heartbeat_loop poll 30 ) &
+        heartbeat_pid=$!
+
         while true; do
             log "Daemon sync cycle starting..."
             run_sync_all_safely
             log "Daemon sync cycle completed, sleeping ${interval}s..."
+            sync_set_status "sleeping" "mode=poll" "sleep=${interval}s"
             sleep "$interval"
         done
     fi
@@ -791,6 +991,38 @@ case "${1:-}" in
     "verify")
         verify_targets
         ;;
+    "health")
+        echo "Ordo Sync Health"
+        echo "==============="
+        echo "State file: $STATE_FILE"
+        if [[ ! -f "$STATE_FILE" ]]; then
+            print_warning "No daemon state file found (service not running?)"
+            exit 1
+        fi
+
+        status_val=$(state_read_value status || true)
+        updated_at_val=$(state_read_value updated_at || true)
+        mode_val=$(state_read_value mode || true)
+
+        echo "status: ${status_val:-unknown}"
+        echo "mode: ${mode_val:-unknown}"
+        echo "updated_at: ${updated_at_val:-unknown}"
+
+        if [[ -n "${updated_at_val:-}" ]]; then
+            updated_epoch=$(date -d "$updated_at_val" +%s 2>/dev/null || echo "")
+            now_epoch=$(date +%s)
+            if [[ -n "$updated_epoch" ]]; then
+                age=$((now_epoch - updated_epoch))
+                echo "age_sec: $age"
+                if [[ "$age" -gt 300 ]]; then
+                    print_warning "State is stale (>300s); daemon may be stuck"
+                    exit 2
+                fi
+            fi
+        fi
+
+        print_success "Health OK"
+        ;;
     *)
         echo "Ordo Unified Sync - Local-first bidirectional sync"
         echo "================================================="
@@ -802,7 +1034,8 @@ case "${1:-}" in
         echo "  sync                                         - One-time sync all targets"
     echo "  daemon [interval-seconds]                    - Background sync daemon"
     echo "  status                                       - Show sync status"
-    echo "  verify                                       - Dry-run check if targets are in sync"
+        echo "  verify                                       - Dry-run check if targets are in sync"
+        echo "  health                                       - Show daemon health/state"
         echo "  conflicts                                    - Show/resolve conflicts"
         echo ""
         echo "Examples:"

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Mount a single rclone remote with VFS caching
-# Usage: ./mount-remote.sh <remote-name>
+# Usage: ./mount-remote.sh <remote-name> [mount-suffix] [rclone-flags]
 
 set -euo pipefail
 
@@ -16,14 +16,27 @@ TIMEOUT="30s"
 RETRIES="1"
 
 # Check arguments
-if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 <remote-name>"
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <remote-name> [mount-suffix] [rclone-flags]"
+    echo "Examples:"
+    echo "  $0 gdrive"
+    echo "  $0 gdrive shared --drive-shared-with-me"
     exit 1
 fi
 
 remote="$1"
-mount_point="$MOUNT_BASE/$remote"
-log_file="$LOG_DIR/mount-$remote.log"
+mount_suffix="${2:-}"
+rclone_flags="${3:-}"
+
+# Determine mount point name
+if [[ -n "$mount_suffix" ]]; then
+    mount_name="${remote}-${mount_suffix}"
+else
+    mount_name="$remote"
+fi
+
+mount_point="$MOUNT_BASE/$mount_name"
+log_file="$LOG_DIR/mount-$mount_name.log"
 
 # Ensure directories exist
 sudo mkdir -p "$MOUNT_BASE" 2>/dev/null || mkdir -p "$HOME/mounts"  # Fallback if no sudo
@@ -35,6 +48,12 @@ log() {
 }
 
 log "Mounting remote: $remote"
+if [[ -n "$mount_suffix" ]]; then
+    log "  Mount suffix: $mount_suffix"
+fi
+if [[ -n "$rclone_flags" ]]; then
+    log "  Flags: $rclone_flags"
+fi
 
 # Check if already mounted
 if mountpoint -q "$mount_point" 2>/dev/null; then
@@ -46,6 +65,7 @@ fi
 log "Executing robust rclone mount for browsing..."
 
 rclone mount "$remote:" "$mount_point" \
+    $rclone_flags \
     --timeout "$TIMEOUT" \
     --retries "$RETRIES" \
     --daemon \

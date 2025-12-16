@@ -244,10 +244,11 @@ init_target() {
     local local_path="$1"
     local remote_path="$2"
     local sync_frequency="${3:-300}"  # Default 5 minutes
+    local rclone_flags="${4:-}"  # Optional rclone flags (e.g., --drive-shared-with-me)
     
     # Validate inputs
     if [[ -z "$local_path" || -z "$remote_path" ]]; then
-        print_error "Usage: ordo-sync.sh init <local-path> <remote-path> [sync-frequency-seconds]"
+        print_error "Usage: ordo-sync.sh init <local-path> <remote-path> [sync-frequency-seconds] [rclone-flags]"
         exit 1
     fi
     
@@ -262,6 +263,9 @@ init_target() {
     log "  Local: $local_path"
     log "  Remote: $remote_path"
     log "  Frequency: ${sync_frequency}s"
+    if [[ -n "$rclone_flags" ]]; then
+        log "  Flags: $rclone_flags"
+    fi
     
     # Create local directory
     mkdir -p "$local_path"
@@ -272,11 +276,12 @@ init_target() {
         print_success "Connected to remote: $remote_name"
         
         # Check if remote path exists and has content
-        if rclone lsd "$remote_path" >/dev/null 2>&1; then
+        if rclone lsd "$remote_path" $rclone_flags >/dev/null 2>&1; then
             print_info "Remote path exists, performing initial sync..."
             
             # Initial sync from remote to local
             if rclone sync "$remote_path" "$local_path" \
+                $rclone_flags \
                 --progress \
                 --log-file "$LOG_FILE" \
                 --log-level INFO; then
@@ -292,7 +297,7 @@ init_target() {
     fi
     
     # Add to config file
-    echo "$local_path|$remote_path|$sync_frequency" >> "$CONFIG_FILE"
+    echo "$local_path|$remote_path|$sync_frequency|$rclone_flags" >> "$CONFIG_FILE"
     print_success "Sync target configured"
     
     echo ""
@@ -309,6 +314,7 @@ sync_target() {
     local local_path="$1"
     local remote_path="$2"
     local target_name="$3"
+    local rclone_flags="${4:-}"
     
     local remote_name
     remote_name=$(get_remote_name "$remote_path")
@@ -414,6 +420,7 @@ sync_target() {
             if "${timeout_cmd[@]}" rclone bisync "$local_path" "$remote_path" \
                 $bisync_flags \
                 $exclude_flags \
+                $rclone_flags \
                 "${resiliency_flags[@]}" \
                 --progress \
                 --log-file "$LOG_FILE" \
@@ -438,6 +445,7 @@ sync_target() {
             if "${timeout_cmd[@]}" rclone bisync "$local_path" "$remote_path" \
                 --resync \
                 $exclude_flags \
+                $rclone_flags \
                 "${resiliency_flags[@]}" \
                 --progress \
                 --log-file "$LOG_FILE" \
@@ -515,14 +523,14 @@ sync_all() {
     local success_count=0
     local total_count=0
     
-    while IFS='|' read -r local_path remote_path sync_frequency; do
+    while IFS='|' read -r local_path remote_path sync_frequency rclone_flags; do
         # Skip empty lines and comments
         [[ -z "$local_path" || "$local_path" =~ ^[[:space:]]*# ]] && continue
         
         total_count=$((total_count + 1))
         local target_name=$(basename "$local_path")
         print_info "Syncing $target_name..."
-        if sync_target "$local_path" "$remote_path" "$target_name"; then
+        if sync_target "$local_path" "$remote_path" "$target_name" "$rclone_flags"; then
             success_count=$((success_count + 1))
             print_success "Synced: $target_name"
         else
@@ -561,7 +569,7 @@ show_status() {
     
     local target_count=0
     
-    while IFS='|' read -r local_path remote_path sync_frequency || [[ -n "$local_path" ]]; do
+    while IFS='|' read -r local_path remote_path sync_frequency rclone_flags || [[ -n "$local_path" ]]; do
         # Skip empty lines and comments
         if [[ -z "$local_path" || "$local_path" =~ ^[[:space:]]*# ]]; then
             continue
@@ -578,6 +586,9 @@ show_status() {
         echo "  Local:     $local_path"
         echo "  Remote:    $remote_path"
         echo "  Frequency: ${sync_frequency}s"
+        if [[ -n "$rclone_flags" ]]; then
+            echo "  Flags:     $rclone_flags"
+        fi
         
         # Check local status
         if [[ -d "$local_path" ]]; then
@@ -710,7 +721,7 @@ start_daemon() {
         heartbeat_pid=$!
 
         # Build inotifywait watch list for all local paths
-        while IFS='|' read -r local_path remote_path freq; do
+        while IFS='|' read -r local_path remote_path freq rclone_flags; do
             # Skip comments and empty lines
             [[ "$local_path" =~ ^[[:space:]]*# ]] && continue
             [[ -z "$local_path" ]] && continue
@@ -859,7 +870,7 @@ verify_targets() {
     fi
 
     local all_ok=1
-    while IFS='|' read -r local_path remote_path sync_frequency || [[ -n "$local_path" ]]; do
+    while IFS='|' read -r local_path remote_path sync_frequency rclone_flags || [[ -n "$local_path" ]]; do
         # Skip empty/comment lines
         if [[ -z "$local_path" || "$local_path" =~ ^[[:space:]]*# ]]; then
             continue
@@ -870,6 +881,9 @@ verify_targets() {
         echo "Target: $name"
         echo "  Local:  $local_path"
         echo "  Remote: $remote_path"
+        if [[ -n "$rclone_flags" ]]; then
+            echo "  Flags:  $rclone_flags"
+        fi
 
         # If a bisync is in progress, skip verification for safety
         if is_bisync_running "$local_path" "$remote_path"; then
@@ -891,7 +905,7 @@ verify_targets() {
 
         # Prefer a bisync dry-run to detect planned changes
         if rclone help bisync >/dev/null 2>&1; then
-            if rclone bisync "$local_path" "$remote_path" --dry-run "${filter_args[@]}" --log-level NOTICE >/dev/null 2>&1; then
+            if rclone bisync "$local_path" "$remote_path" --dry-run "${filter_args[@]}" $rclone_flags --log-level NOTICE >/dev/null 2>&1; then
                 print_success "In sync (no planned changes)"
             else
                 print_warning "Drift detected or state missing (see rclone output for details)"
@@ -899,7 +913,7 @@ verify_targets() {
             fi
         else
             # Fallback: size-only check
-            if rclone check "$local_path" "$remote_path" --size-only --log-level NOTICE >/dev/null 2>&1; then
+            if rclone check "$local_path" "$remote_path" --size-only $rclone_flags --log-level NOTICE >/dev/null 2>&1; then
                 print_success "In sync (size-only)"
             else
                 print_warning "Differences detected (size-only check)"
@@ -954,12 +968,15 @@ case "${1:-}" in
             echo "Date: $(date -Is)"
             echo ""
             if [[ -f "$CONFIG_FILE" ]]; then
-                while IFS='|' read -r local_path remote_path sync_frequency || [[ -n "$local_path" ]]; do
+                while IFS='|' read -r local_path remote_path sync_frequency rclone_flags || [[ -n "$local_path" ]]; do
                     [[ -z "$local_path" || "$local_path" =~ ^[[:space:]]*# ]] && continue
                     name=$(basename "$local_path")
                     echo "Target: $name"
                     echo "  Local:  $local_path"
                     echo "  Remote: $remote_path"
+                    if [[ -n "$rclone_flags" ]]; then
+                        echo "  Flags:  $rclone_flags"
+                    fi
                     # State marker
                     if [[ -f "$local_path/.rclone-bisync-state" ]]; then
                         print_success "State: bisync initialized"

@@ -1,243 +1,333 @@
-# Ordo - Local-First Cloud Storage
+# Ordo – Complete Documentation
 
-**Zero application crashes. Always-available files. Background sync.**
+## Overview
 
-Ordo provides a hybrid approach to cloud storage that eliminates the fundamental problem of applications crashing when network connectivity drops.
+Ordo is a local-first cloud storage system with two distinct operation modes:
 
-## The Problem Ordo Solves
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           ORDO ARCHITECTURE                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  MIRROR MODE                        CLOUD-ONLY MODE                     │
+│  (sync-targets.conf)                (remotes.conf)                      │
+│                                                                         │
+│  ┌─────────────┐                    ┌─────────────┐                     │
+│  │ ~/Documents │ ←──bisync──→       │  /media/$USER/gdrive/  │          │
+│  │ (local)     │      Cloud         │  (FUSE mount)          │          │
+│  └─────────────┘                    └─────────────┘                     │
+│        ↑                                   ↑                            │
+│   Apps point here                    Humans browse here                 │
+│   Daemon syncs                       No local copy                      │
+│   Works offline                      Unmount when done                  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-**Traditional cloud storage approaches fail applications:**
-- Mount-based solutions cause apps to crash when network drops
-- Applications become unresponsive waiting for network-dependent file operations
-- Complex VFS caching doesn't prevent connection-dependent behavior
-- Users need "emergency fix" scripts to recover from frozen applications
+## Installation
 
-## The Ordo Solution
+### Prerequisites
 
-**Local-first with background sync** (like OneDrive/Dropbox model):
-- ✅ **Applications always work** - Point to truly local files
-- ✅ **Zero crashes** - Network issues never affect applications  
-- ✅ **Background sync** - Files sync transparently when connected
-- ✅ **Browse everything** - Optional remote mounts for exploration
-- ✅ **Set and forget** - Minimal maintenance after setup
+```bash
+# Debian/Ubuntu
+sudo apt update
+sudo apt install -y rclone fuse3 inotify-tools
 
-## Quick Start
+# Arch
+sudo pacman -S rclone fuse3 inotify-tools
+```
 
-### 1. One-Time Setup
+### Configure rclone Remotes
+
+```bash
+rclone config
+# Follow prompts to add OneDrive, Google Drive, etc.
+# Example names: onedrive-personal, gdrive-work
+```
+
+### Setup Ordo
+
 ```bash
 ./setup.sh
 ```
-This interactive script will:
-- Initialize Ordo
-- Configure remote browsing (optional)
-- Set up local sync targets
-- Start background sync daemon
 
-### 2. Point Applications to Local Files
+This will:
+1. Initialize directories and configs
+2. Optionally mount remotes for browsing
+3. Configure sync targets
+4. Optionally start background daemon
+
+---
+
+## MIRROR Mode
+
+**Purpose**: Complete bidirectional sync – local copy always matches cloud.
+
+**Use for**: Documents, projects, Obsidian vaults – anything you need offline and synced.
+
+### Configuration
+
+Edit `config/sync-targets.conf`:
+
 ```bash
-# Example: Obsidian vault
-# Setup creates: ~/ObsidianVaults/MyVault/
-# Point Obsidian to: ~/ObsidianVaults/MyVault/
-# Syncs with: onedrive:Documents/ObsidianVaults/MyVault
- 
-# Read-only verification (after initial run completes)
-./scripts/ordo-sync.sh verify       # Reports “In sync” vs “Drift detected”
-
-# Example: Project development  
-# Setup creates: ~/Documents/MyProject/
-# Point your IDE to: ~/Documents/MyProject/
-# Syncs with: gdrive:Projects/MyProject
-## Verification and First Run
-
-- First successful run creates a local marker: `<local>/.rclone-bisync-state`.
-- Until that first run completes, bisync operates with `--resync` and dry-runs may error due to missing prior listings — this is expected.
-- After the first run completes, use:
-   - `./scripts/ordo-sync.sh verify` — safe dry-run check (skips if a live bisync is running)
-   - Optional: `rclone check <local> <remote> --size-only` for a read-only double-check
-
-How to tell it’s done:
-- rclone process exits; log contains “✓ Bidirectional sync completed for <Target>”.
-- `<local>/.rclone-bisync-state` exists.
-- `./scripts/ordo-sync.sh verify` reports “In sync (no planned changes)”.
+# Format: local_path|remote_path|sync_frequency_seconds|rclone_flags
+/home/user/Documents|onedrive:Documents|300|
+/home/user/SharedProject|gdrive:SharedProject|180|--drive-shared-with-me
 ```
 
-### 3. That's It!
-- Files sync automatically in background
-- Applications never know files are synced
-- Work completely offline
-- Browse all remote files at `/media/$USER/remote-name/` when connected
-Common first-run message during dry-run:
-- `Bisync critical error: cannot find prior Path1 or Path2 listings ... Must run --resync to recover.`
-   - Cause: initial `--resync` hasn’t finished writing prior listings yet.
-   - Fix: wait for the first run to complete; then use `./scripts/ordo-sync.sh verify`.
+### Commands
 
-## Architecture
-
-### Two-Tier System
-1. **Local Sync Targets** (`~/Documents/`, `~/ObsidianVaults/`)
-   - Where applications point
-### Stale Bisync Lock
-- Symptom: immediate retries with 0 B transferred or refusal to start.
-- Behavior: the sync script checks `~/.cache/rclone/bisync/*.lck`, verifies the PID, and auto-clears the lock if the PID isn’t running (tries `rclone deletefile`, then `rm`).
-   - Always available (even offline)
-   - Background sync keeps current
-
-2. **Remote Browse Mounts** (`/media/$USER/remote-name/`)
-   - For exploring all remote files
-   - Only when connected
-   - Like plugging in a USB drive
-
-### Directory Structure
-```
-# Local Sync Targets (for applications)
-~/ObsidianVaults/MyVault/     ← Point Obsidian here
-~/Documents/MyProject/        ← Point IDE here
-~/Documents/important.txt     ← Always available
-- `config/sync-excludes.conf` — rclone filter rules for files/folders to exclude from sync.
-- Used automatically by `ordo-sync.sh`.
-
-- External timeout wrapper (disabled by default):
-   - `ORDO_BISYNC_TIMEOUT_SEC=<seconds>` — apply an upper bound to a bisync run (0 or unset disables).
-- Built-in resiliency (no extra config needed):
-   - Retries, low-level retries, periodic stats, parallel checkers/transfers.
-   - Logs at `logs/ordo-sync.log`.
-# Remote Browse Mounts (for exploration)  
-/media/$USER/onedrive/        ← Browse when connected
-/media/$USER/gdrive/          ← Browse when connected
-```
-
-## Core Commands
-
-### Setup (run once)
 ```bash
-./setup.sh                    # Interactive production setup
+# Add new sync target
+./scripts/ordo-sync.sh init ~/NewFolder remote:NewFolder 300
+
+# Add Google Drive "Shared with me" folder
+./scripts/ordo-sync.sh init ~/Shared/Team gdrive:TeamFolder 300 "--drive-shared-with-me"
+
+# Manual sync
+./scripts/ordo-sync.sh sync
+
+# Check status
+./scripts/ordo-sync.sh status
+
+# Verify sync (dry-run, safe)
+./scripts/ordo-sync.sh verify
+
+# Start background daemon
+./scripts/ordo-sync.sh daemon &
+
+# Or use watch mode (syncs on file changes)
+./scripts/ordo-sync.sh daemon watch
 ```
 
-### Daily Use
+### Stop Mirroring
+
+Comment out or delete the line in `config/sync-targets.conf`:
+
 ```bash
-./scripts/status.sh           # Check overall status
-./scripts/ordo-sync.sh status # Check sync targets
+# DISABLED: /home/user/OldProject|gdrive:OldProject|300|
 ```
 
-### Manual Operations
+Local files remain – they just stop syncing.
+
+### Daemon Modes
+
+| Mode | Behavior |
+|------|----------|
+| `daemon` | Polls at configured intervals |
+| `daemon watch` | Uses inotify – syncs immediately on local changes |
+
+---
+
+## CLOUD-ONLY Mode
+
+**Purpose**: Mount cloud storage for browsing – files stay in cloud, no local copy.
+
+**Use for**: Occasional access, uploading files, browsing archives.
+
+### Configuration
+
+Edit `config/remotes.conf`:
+
 ```bash
-./scripts/ordo-sync.sh sync         # Force sync now
-./scripts/ordo-sync.sh daemon &     # Start background sync
-./scripts/ordo-sync.sh conflicts    # View/resolve conflicts
-./scripts/automount.sh              # Mount remotes for browsing
+# Format: remote_name|mount_suffix|rclone_flags
+onedrive||
+gdrive||
+gdrive|shared|--drive-shared-with-me
 ```
 
-### Add New Sync Targets
+This creates:
+- `/media/$USER/onedrive/` – Your OneDrive
+- `/media/$USER/gdrive/` – Your Google Drive
+- `/media/$USER/gdrive-shared/` – Google Drive "Shared with me"
+
+### Commands
+
 ```bash
-./scripts/ordo-sync.sh init ~/Documents/NewProject gdrive:Projects/NewProject
+# Mount all configured remotes
+./scripts/automount.sh
+
+# Unmount all
+./scripts/unmount-all.sh
+
+# Browse
+ls /media/$USER/gdrive-shared/
+
+# Upload file to cloud (no local copy kept)
+cp myfile.pdf /media/$USER/gdrive/Uploads/
+
+# Download from cloud
+cp /media/$USER/gdrive/report.pdf ~/Downloads/
 ```
 
-## Key Benefits
+### unmount-all.sh
 
-### For Users
-- **Never lose work** - Files always available locally
-- **No application crashes** - Network issues don't affect apps
-- **Simple workflow** - Edit locally, sync happens automatically
-- **Browse everything** - Access all remote files when needed
+**Only unmounts CLOUD-ONLY mounts.** Does NOT affect MIRROR mode folders.
 
-### For Developers  
-- **Reliable development** - IDE never freezes on network issues
-- **Version control works** - Git repos are truly local
-- **Build systems work** - No network dependencies in build process
-- **Debugging works** - No mysterious network-related hangs
+---
 
-### For Obsidian Users
-- **Vault always opens** - Never crashes on network drops
-- **Fast search/indexing** - All files are local
-- **Plugin compatibility** - Plugins work with local files
-- **Mobile sync** - Background sync keeps mobile app current
+## Google Drive "Shared with Me"
 
-## Requirements
+Access files others have shared with you:
 
-- **rclone** installed and configured with your cloud storage
-- **Linux with FUSE support** (usually pre-installed)
-- **Sufficient local disk space** for sync targets
+### CLOUD-ONLY (just browse)
 
-## Troubleshooting
-
-### Sync Issues
+Add to `config/remotes.conf`:
 ```bash
-./scripts/ordo-sync.sh status     # Check sync status
-./scripts/ordo-sync.sh conflicts  # View conflicts
-./scripts/ordo-sync.sh sync       # Force sync
+gdrive|shared|--drive-shared-with-me
 ```
 
-### Mount Issues
+Then: `./scripts/automount.sh`
+
+Browse at: `/media/$USER/gdrive-shared/`
+
+### MIRROR (full sync)
+
 ```bash
-./scripts/status.sh               # Check mount status  
-./scripts/unmount-all.sh          # Clean unmount
-./scripts/automount.sh            # Remount for browsing
-```
-
-### Logs
-- **Sync logs**: `logs/ordo-sync.log`
-- **Mount logs**: `logs/automount.log`
-- **Conflicts**: `conflicts/` directory
-
-## Configuration Files
-
-### `config/sync-targets.conf` - Local Sync Targets
-```
-# Format: local_path|remote_path|sync_frequency_seconds
-/home/user/ObsidianVaults/MyVault|onedrive:Documents/ObsidianVaults/MyVault|300
-/home/user/Documents/Project|gdrive:Projects/Project|180
-```
-
-### `config/remotes.conf` - Remote Browsing (Optional)
-```
-# List rclone remotes for browsing mounts
-onedrive
-gdrive
-```
-
-## Philosophy
-
-**Applications should never know files are synced.**
-
-- Point applications to `~/Documents/MyProject/` (local)
-- NOT to `/media/$USER/gdrive/Projects/MyProject/` (remote)
-- Background sync keeps local files current with remote
-- Browse remote files separately when needed
-
-## Migration from Mount-Based Systems
-
-If you're coming from a mount-based approach:
-
-1. **Stop pointing applications to mount points**
-2. **Run `./setup.sh` to create local sync targets**  
-3. **Point applications to new local paths**
-4. **Let background sync handle synchronization**
-
-## Advanced Usage
-
-### Daemon Management
-```bash
-# Start daemon
-nohup ./scripts/ordo-sync.sh daemon > /dev/null 2>&1 &
-
-# Find daemon PID
-ps aux | grep ordo-sync
-
-# Stop daemon  
-kill <PID>
-```
-
-### Custom Sync Frequencies
-```bash
-# Sync every 1 minute (60 seconds)
-./scripts/ordo-sync.sh init ~/Documents/Critical onedrive:Critical 60
-
-# Sync every 10 minutes (600 seconds)  
-./scripts/ordo-sync.sh init ~/Documents/Normal gdrive:Normal 600
+./scripts/ordo-sync.sh init ~/Shared/TeamProject gdrive:TeamProject 300 "--drive-shared-with-me"
 ```
 
 ---
 
-**Motto**: Local files that sync in background. Zero application interference.
+## Systemd Service (Auto-start)
 
-**Result**: From complex mount-based solutions with emergency fix scripts to simple local-first approach that just works.
+For persistent daemon that survives reboots:
+
+```bash
+# Install service
+./scripts/setup-systemd.sh
+
+# Or manually:
+mkdir -p ~/.config/systemd/user
+cp systemd/ordo-sync.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ordo-sync.service
+loginctl enable-linger "$USER"  # Run even when logged out
+```
+
+### Service Commands
+
+```bash
+systemctl --user status ordo-sync
+systemctl --user restart ordo-sync
+journalctl --user -u ordo-sync -f
+```
+
+---
+
+## Troubleshooting
+
+### Check Status
+
+```bash
+./scripts/status.sh              # Overall status
+./scripts/ordo-sync.sh status    # Sync targets
+./scripts/ordo-sync.sh health    # Daemon health
+```
+
+### View Logs
+
+```bash
+tail -f logs/ordo-sync.log       # Sync log
+tail -f logs/automount.log       # Mount log
+```
+
+### Force Resync
+
+```bash
+ORDO_FORCE_RESYNC=1 ./scripts/ordo-sync.sh sync
+```
+
+### Conflicts
+
+```bash
+./scripts/ordo-sync.sh conflicts  # View conflicts
+ls conflicts/                     # Conflict backups
+```
+
+### Stuck Bisync Lock
+
+The daemon auto-clears stale locks. If needed manually:
+
+```bash
+rm ~/.cache/rclone/bisync/*.lck
+```
+
+---
+
+## Configuration Reference
+
+### sync-targets.conf (MIRROR)
+
+```bash
+# Format: local_path|remote_path|sync_frequency_seconds|rclone_flags
+#
+# Examples:
+/home/user/Documents|onedrive:Documents|300|
+/home/user/Shared|gdrive:Shared|180|--drive-shared-with-me
+```
+
+### remotes.conf (CLOUD-ONLY)
+
+```bash
+# Format: remote_name|mount_suffix|rclone_flags
+#
+# Examples:
+onedrive||                              # → /media/$USER/onedrive/
+gdrive||                                # → /media/$USER/gdrive/
+gdrive|shared|--drive-shared-with-me    # → /media/$USER/gdrive-shared/
+```
+
+### sync-excludes.conf
+
+Patterns to exclude from sync (uses rclone filter syntax).
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORDO_REMOTE_POLL_INTERVAL` | 300 | Seconds between remote polls in watch mode |
+| `ORDO_BISYNC_TIMEOUT_SEC` | 0 | Timeout for bisync (0 = no timeout) |
+| `ORDO_FORCE_RESYNC` | 0 | Set to 1 to force --resync |
+| `ORDO_USE_EXCLUDES` | 1 | Set to 0 to disable exclusions |
+
+---
+
+## Directory Structure
+
+```
+ordo/
+├── config/
+│   ├── sync-targets.conf    # MIRROR mode targets
+│   ├── remotes.conf         # CLOUD-ONLY mounts
+│   └── sync-excludes.conf   # Exclusion patterns
+├── scripts/
+│   ├── ordo-sync.sh         # Main sync script
+│   ├── automount.sh         # Mount cloud remotes
+│   ├── mount-remote.sh      # Mount single remote
+│   ├── unmount-all.sh       # Unmount all
+│   ├── status.sh            # Show status
+│   ├── init.sh              # Initialize Ordo
+│   └── setup-systemd.sh     # Install systemd service
+├── systemd/
+│   └── ordo-sync.service    # Systemd unit file
+├── logs/                    # Log files
+├── conflicts/               # Conflict backups
+└── setup.sh                 # Interactive setup
+```
+
+---
+
+## Philosophy
+
+> **Applications should never know files are synced.**
+
+- Point apps to local paths (`~/Documents/`)
+- NOT to mount points (`/media/$USER/...`)
+- Background sync keeps local files current
+- Zero crashes from network issues
+
+**MIRROR** = for apps, works offline, constant sync
+**CLOUD-ONLY** = for humans, browse when connected, no local copy

@@ -2,6 +2,10 @@
 
 # Ordo Automount - Mount all configured rclone remotes with VFS caching
 # Usage: ./automount.sh
+#
+# Config format (remotes.conf):
+#   remote_name|mount_suffix|rclone_flags
+#   or just: remote_name (for simple mounts)
 
 set -euo pipefail
 
@@ -39,29 +43,28 @@ log "Starting Ordo automount process"
 available_remotes=$(rclone listremotes | sed 's/:$//')
 log "Available rclone remotes: $available_remotes"
 
-# Read configured remotes from config file
-configured_remotes=()
-while IFS= read -r line; do
-    # Skip empty lines and comments
-    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    # Remove leading/trailing whitespace
-    remote=$(echo "$line" | xargs)
-    [[ -n "$remote" ]] && configured_remotes+=("$remote")
-done < "$CONFIG_FILE"
-
-if [[ ${#configured_remotes[@]} -eq 0 ]]; then
-    log "WARNING: No remotes configured in $CONFIG_FILE"
-    exit 0
-fi
-
-log "Configured remotes: ${configured_remotes[*]}"
-
 # Mount each configured remote
 mounted_count=0
 failed_count=0
 
-for remote in "${configured_remotes[@]}"; do
+while IFS='|' read -r remote mount_suffix rclone_flags || [[ -n "$remote" ]]; do
+    # Skip empty lines and comments
+    [[ -z "$remote" || "$remote" =~ ^[[:space:]]*# ]] && continue
+    
+    # Remove leading/trailing whitespace
+    remote=$(echo "$remote" | xargs)
+    mount_suffix=$(echo "${mount_suffix:-}" | xargs)
+    rclone_flags=$(echo "${rclone_flags:-}" | xargs)
+    
+    [[ -z "$remote" ]] && continue
+    
     log "Processing remote: $remote"
+    if [[ -n "$mount_suffix" ]]; then
+        log "  Mount suffix: $mount_suffix"
+    fi
+    if [[ -n "$rclone_flags" ]]; then
+        log "  Flags: $rclone_flags"
+    fi
     
     # Check if remote exists in rclone config
     if ! echo "$available_remotes" | grep -q "^$remote$"; then
@@ -70,16 +73,22 @@ for remote in "${configured_remotes[@]}"; do
         continue
     fi
     
-    # Test remote connectivity
+    # Test remote connectivity (with flags if provided)
     log "Testing connectivity to $remote..."
-    if ! rclone lsd "$remote:" &>/dev/null; then
+    if ! rclone lsd "$remote:" $rclone_flags &>/dev/null; then
         log "ERROR: Cannot connect to remote '$remote' (check authentication)"
         ((failed_count++))
         continue
     fi
     
-    # Create mount directory
-    mount_point="$MOUNT_BASE/$remote"
+    # Determine mount point name
+    if [[ -n "$mount_suffix" ]]; then
+        mount_name="${remote}-${mount_suffix}"
+    else
+        mount_name="$remote"
+    fi
+    
+    mount_point="$MOUNT_BASE/$mount_name"
     mkdir -p "$mount_point"
     
     # Check if already mounted
@@ -91,14 +100,14 @@ for remote in "${configured_remotes[@]}"; do
     
     # Mount the remote
     log "Mounting $remote to $mount_point..."
-    if "$ORDO_DIR/scripts/mount-remote.sh" "$remote"; then
-        log "SUCCESS: Mounted $remote"
+    if "$ORDO_DIR/scripts/mount-remote.sh" "$remote" "$mount_suffix" "$rclone_flags"; then
+        log "SUCCESS: Mounted $remote at $mount_point"
         mounted_count=$((mounted_count + 1))
     else
         log "ERROR: Failed to mount $remote"
         failed_count=$((failed_count + 1))
     fi
-done
+done < "$CONFIG_FILE"
 
 log "Automount complete: $mounted_count mounted, $failed_count failed"
 
